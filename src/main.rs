@@ -48,9 +48,7 @@ fn main() {
     if let Ok(does_exist) = fs::exists(&path) {
         if does_exist {
             if cli.json {
-                let files = get_files(&path);
-                let json_output = serde_json::to_string_pretty(&files).unwrap_or_else(|_| "Error serializing to JSON".into());
-                println!("{}", json_output);
+                print_json(&path);
             } else {
                 print_table(path);
             }
@@ -60,6 +58,12 @@ fn main() {
     } else {
         println!("{}", "Error checking path existence".red());
     }
+}
+
+fn print_json(path: &PathBuf) {
+    let files = get_files(path);
+    let json_output = serde_json::to_string_pretty(&files).unwrap_or_else(|_| "Error serializing to JSON".into());
+    println!("{}", json_output);
 }
 
 fn print_table(path: PathBuf) {
