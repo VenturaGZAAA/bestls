@@ -1,12 +1,13 @@
 use clap::Parser;
 use owo_colors::OwoColorize;
 use serde::Serialize;
-use std::default::Default;
-use std::fs::Metadata;
-use std::path::Path;
-use std::time::{Duration, SystemTime};
-use std::{env, io};
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    fs::Metadata,
+    io,
+    path::{Path, PathBuf},
+    time::SystemTime,
+};
 use strum::Display;
 use tabled::{
     Table, Tabled,
@@ -21,6 +22,7 @@ pub enum EntryType {
     File,
     Directory,
     Total,
+    Time,
 }
 
 #[derive(Debug, Tabled, Serialize)]
@@ -66,25 +68,29 @@ pub struct CLI {
         long_help = "Sorts the entries by size (this will also set --recursive to true)"
     )]
     sort: bool,
-    #[clap(skip)]
-    test: bool,
+    #[arg(
+        short,
+        long,
+        default_value_t = false,
+        help = "Displays the elapsed time",
+        long_help = "Appends the elapsed time to scan the dir at the end of the list"
+    )]
+    elapsed: bool,
 }
 
 impl CLI {
-    pub fn run(mut self) -> Result<(Duration, String), String> {
-        let start_time = SystemTime::now();
+    pub fn run(mut self) -> Result<String, String> {
         let output;
         let path = self.get_path();
         if self.sort {
             self.recursive = true;
         }
-        self.test = env::var("BESTLS_TEST").is_ok();
         if let Ok(does_exist) = fs::exists(&path) {
             if does_exist {
                 if self.json {
-                    output = self.print_json();
+                    output = self.get_json();
                 } else {
-                    output = self.print_table();
+                    output = self.get_table();
                 }
             } else {
                 return Err(format!("{}", "Path does not exist".red()));
@@ -92,22 +98,17 @@ impl CLI {
         } else {
             return Err(format!("{}", "Error checking path existence".red()));
         }
-        let end_time = SystemTime::now();
-        let elapsed = end_time.duration_since(start_time).unwrap();
-        if self.test {
-            eprintln!("Total time: {:?}", elapsed);
-        }
-        Ok((elapsed, output))
+        Ok(output)
     }
     fn get_path(&self) -> PathBuf {
         self.path.clone().unwrap_or(PathBuf::from("."))
     }
-    fn print_json(&self) -> String {
+    fn get_json(&self) -> String {
         let files = self.get_files();
         serde_json::to_string_pretty(&files).unwrap_or_else(|_| "Error serializing to JSON".into())
     }
 
-    fn print_table(&self) -> String {
+    fn get_table(&self) -> String {
         let files = self.get_files();
         let mut table = Table::new(&files);
         table.with(Style::modern());
@@ -118,6 +119,7 @@ impl CLI {
         format!("{}", table)
     }
     pub fn get_files(&self) -> Vec<FileEntry> {
+        let start_time = SystemTime::now();
         let mut data = Vec::default();
         if let Ok(read_dir) = fs::read_dir(self.get_path()) {
             for file in read_dir.flatten() {
@@ -141,6 +143,19 @@ impl CLI {
                     .to_string(),
             })
         }
+
+        if self.elapsed {
+            let end_time = SystemTime::now();
+            let elapsed = end_time.duration_since(start_time).unwrap();
+            data.push(FileEntry {
+                name: String::new(),
+                e_type: EntryType::Time,
+                size: String::new(),
+                byte_size: 0,
+                modified: format!("{:?}", elapsed),
+            });
+        }
+
         data
     }
 
@@ -228,7 +243,7 @@ mod tests {
             json,
             recursive,
             sort,
-            test,
+            elapsed: test,
         };
         let files: Vec<String> = cli.get_files().iter().map(|f| f.name.clone()).collect();
         assert!(files.contains(&String::from(".git")));
@@ -239,7 +254,7 @@ mod tests {
             json,
             recursive,
             sort,
-            test,
+            elapsed: test,
         };
         let files: Vec<String> = cli.get_files().iter().map(|f| f.name.clone()).collect();
         assert!(!files.contains(&String::from(".git")));
