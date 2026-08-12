@@ -115,7 +115,7 @@ impl CLI {
         };
 
         if self.sort {
-            data.sort_unstable_by(|a, b| a.byte_size.cmp(&b.byte_size));
+            data.sort_unstable_by_key(|a| a.byte_size);
         }
         if self.recursive {
             let total: u64 = data.iter().map(|entry| entry.byte_size).sum();
