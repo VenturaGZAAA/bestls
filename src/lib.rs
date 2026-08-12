@@ -18,6 +18,7 @@ use tabled::{
 pub enum EntryType {
     File,
     Directory,
+    Total,
 }
 
 #[derive(Debug, Tabled, Serialize)]
@@ -27,7 +28,9 @@ pub struct FileEntry {
     #[tabled(rename = "Type")]
     e_type: EntryType,
     #[tabled(rename = "Size")]
-    byte_size: String,
+    size: String,
+    #[tabled(skip)]
+    byte_size: u64,
     #[tabled(rename = "Modified")]
     modified: String,
 }
@@ -49,15 +52,26 @@ pub struct CLI {
         short,
         long,
         default_value_t = false,
-        help = "Recursively calculate the size of directories"
+        help = "Recursively calculate the size of directories",
+        long_help = "Recursively calculate the size of directories, will also show the total size at the end"
     )]
     recursive: bool,
+    #[arg(
+        short,
+        long,
+        default_value_t = false,
+        help = "Sorts the entries by size",
+        long_help = "Sorts the entries by size (this will also set --recursive to true)"
+    )]
+    sort: bool,
 }
 
 impl CLI {
-    pub fn run(&self) {
+    pub fn run(mut self) {
         let path = self.get_path();
-
+        if self.sort {
+            self.recursive = true;
+        }
         if let Ok(does_exist) = fs::exists(&path) {
             if does_exist {
                 if self.json {
@@ -100,6 +114,23 @@ impl CLI {
             }
         };
 
+        if self.sort {
+            data.sort_unstable_by(|a, b| a.byte_size.cmp(&b.byte_size));
+        }
+        if self.recursive {
+            let total: u64 = data.iter().map(|entry| entry.byte_size).sum();
+            let (byte_size, size) = (total, Self::format_bytes(total));
+            data.push(FileEntry {
+                name: String::new(),
+                e_type: EntryType::Total,
+                size,
+                byte_size,
+                modified: chrono::DateTime::<chrono::Local>::from(std::time::SystemTime::now())
+                    .format("%Y-%m-%d %H:%M:%S")
+                    .to_string(),
+            })
+        }
+
         data
     }
 
@@ -117,15 +148,17 @@ impl CLI {
                 EntryType::File
             };
 
-            let byte_size = Self::format_bytes(if metadata.is_dir() && self.recursive {
+            let byte_size = if metadata.is_dir() && self.recursive {
                 Self::get_dir_size(file.path()).unwrap_or(0)
             } else {
                 metadata.len()
-            });
+            };
+            let size = Self::format_bytes(byte_size);
 
             data.push(FileEntry {
                 name,
                 e_type,
+                size,
                 byte_size,
                 modified: self.get_modified(metadata),
             });
@@ -180,6 +213,7 @@ mod tests {
             all: true,
             json: false,
             recursive: false,
+            sort: false,
         };
         let files: Vec<String> = cli.get_files().iter().map(|f| f.name.clone()).collect();
         assert!(files.contains(&String::from(".git")));
@@ -189,6 +223,7 @@ mod tests {
             all: false,
             json: false,
             recursive: false,
+            sort: false,
         };
         let files: Vec<String> = cli.get_files().iter().map(|f| f.name.clone()).collect();
         assert!(!files.contains(&String::from(".git")));
