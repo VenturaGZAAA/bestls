@@ -2,6 +2,8 @@ use clap::Parser;
 use owo_colors::OwoColorize;
 use serde::Serialize;
 use std::fs::Metadata;
+use std::io;
+use std::path::Path;
 use std::{fs, path::PathBuf};
 use strum::Display;
 use tabled::{
@@ -25,7 +27,7 @@ pub struct FileEntry {
     #[tabled(rename = "Type")]
     e_type: EntryType,
     #[tabled(rename = "Size")]
-    bytes: u64,
+    byte_size: String,
     #[tabled(rename = "Modified")]
     modified: String,
 }
@@ -43,6 +45,13 @@ pub struct CLI {
     all: bool,
     #[arg(short, long, default_value_t = false, help = "Output in JSON format")]
     json: bool,
+    #[arg(
+        short,
+        long,
+        default_value_t = false,
+        help = "Recursively calculate the size of directories"
+    )]
+    recursive: bool,
 }
 
 impl CLI {
@@ -102,17 +111,52 @@ impl CLI {
                 return;
             }
 
+            let e_type = if metadata.is_dir() {
+                EntryType::Directory
+            } else {
+                EntryType::File
+            };
+
+            let byte_size = Self::format_bytes(if metadata.is_dir() && self.recursive {
+                Self::get_dir_size(file.path()).unwrap_or(0)
+            } else {
+                metadata.len()
+            });
+
             data.push(FileEntry {
                 name,
-                e_type: if metadata.is_dir() {
-                    EntryType::Directory
-                } else {
-                    EntryType::File
-                },
-                bytes: metadata.len(),
+                e_type,
+                byte_size,
                 modified: self.get_modified(metadata),
             });
         }
+    }
+
+    pub fn format_bytes(bytes: u64) -> String {
+        match bytes as f64 {
+            1e12.. => format!("{:.2} TB", bytes as f64 / 1e12),
+            1e9.. => format!("{:.2} GB", bytes as f64 / 1e9),
+            1e6.. => format!("{:.2} MB", bytes as f64 / 1e6),
+            1e3.. => format!("{:.2} KB", bytes as f64 / 1e3),
+            _ => format!("{} B", bytes),
+        }
+    }
+
+    fn get_dir_size(path: impl AsRef<Path>) -> io::Result<u64> {
+        let mut total_size: u64 = 0;
+
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            let metadata = entry.metadata()?;
+
+            if metadata.is_dir() {
+                total_size += Self::get_dir_size(entry.path())?;
+            } else {
+                total_size += metadata.len();
+            }
+        }
+
+        Ok(total_size)
     }
 
     fn get_modified(&self, metadata: Metadata) -> String {
@@ -135,6 +179,7 @@ mod tests {
             path: None,
             all: true,
             json: false,
+            recursive: false,
         };
         let files: Vec<String> = cli.get_files().iter().map(|f| f.name.clone()).collect();
         assert!(files.contains(&String::from(".git")));
@@ -143,8 +188,18 @@ mod tests {
             path: None,
             all: false,
             json: false,
+            recursive: false,
         };
         let files: Vec<String> = cli.get_files().iter().map(|f| f.name.clone()).collect();
         assert!(!files.contains(&String::from(".git")));
+    }
+    #[test]
+    fn format_size_string() {
+        assert_eq!("0 B", CLI::format_bytes(0));
+        assert_eq!("504 B", CLI::format_bytes(504));
+        assert_eq!("16.69 KB", CLI::format_bytes(16.69e3 as u64));
+        assert_eq!("16.69 MB", CLI::format_bytes(16.69e6 as u64));
+        assert_eq!("16.69 GB", CLI::format_bytes(16.69e9 as u64));
+        assert_eq!("16.69 TB", CLI::format_bytes(16.69e12 as u64));
     }
 }
