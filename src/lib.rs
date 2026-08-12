@@ -1,9 +1,11 @@
 use clap::Parser;
 use owo_colors::OwoColorize;
 use serde::Serialize;
+use std::default::Default;
 use std::fs::Metadata;
-use std::io;
 use std::path::Path;
+use std::time::{Duration, SystemTime};
+use std::{env, io};
 use std::{fs, path::PathBuf};
 use strum::Display;
 use tabled::{
@@ -64,39 +66,48 @@ pub struct CLI {
         long_help = "Sorts the entries by size (this will also set --recursive to true)"
     )]
     sort: bool,
+    #[clap(skip)]
+    test: bool,
 }
 
 impl CLI {
-    pub fn run(mut self) {
+    pub fn run(mut self) -> Result<(Duration, String), String> {
+        let start_time = SystemTime::now();
+        let output;
         let path = self.get_path();
         if self.sort {
             self.recursive = true;
         }
+        self.test = env::var("BESTLS_TEST").is_ok();
         if let Ok(does_exist) = fs::exists(&path) {
             if does_exist {
                 if self.json {
-                    self.print_json()
+                    output = self.print_json();
                 } else {
-                    self.print_table()
+                    output = self.print_table();
                 }
             } else {
-                eprintln!("{}", "Path does not exist".red())
+                return Err(format!("{}", "Path does not exist".red()));
             }
         } else {
-            eprintln!("{}", "Error checking path existence".red())
+            return Err(format!("{}", "Error checking path existence".red()));
         }
+        let end_time = SystemTime::now();
+        let elapsed = end_time.duration_since(start_time).unwrap();
+        if self.test {
+            eprintln!("Total time: {:?}", elapsed);
+        }
+        Ok((elapsed, output))
     }
     fn get_path(&self) -> PathBuf {
         self.path.clone().unwrap_or(PathBuf::from("."))
     }
-    fn print_json(&self) {
+    fn print_json(&self) -> String {
         let files = self.get_files();
-        let json_output = serde_json::to_string_pretty(&files)
-            .unwrap_or_else(|_| "Error serializing to JSON".into());
-        println!("{}", json_output);
+        serde_json::to_string_pretty(&files).unwrap_or_else(|_| "Error serializing to JSON".into())
     }
 
-    fn print_table(&self) {
+    fn print_table(&self) -> String {
         let files = self.get_files();
         let mut table = Table::new(&files);
         table.with(Style::modern());
@@ -104,7 +115,7 @@ impl CLI {
         table.modify(Columns::one(2), Color::FG_BRIGHT_MAGENTA);
         table.modify(Columns::one(3), Color::FG_BRIGHT_YELLOW);
         table.modify(Rows::first(), Color::FG_BRIGHT_GREEN);
-        println!("{}", table);
+        format!("{}", table)
     }
     pub fn get_files(&self) -> Vec<FileEntry> {
         let mut data = Vec::default();
@@ -125,12 +136,11 @@ impl CLI {
                 e_type: EntryType::Total,
                 size,
                 byte_size,
-                modified: chrono::DateTime::<chrono::Local>::from(std::time::SystemTime::now())
+                modified: chrono::DateTime::<chrono::Local>::from(SystemTime::now())
                     .format("%Y-%m-%d %H:%M:%S")
                     .to_string(),
             })
         }
-
         data
     }
 
@@ -194,9 +204,7 @@ impl CLI {
 
     fn get_modified(&self, metadata: Metadata) -> String {
         chrono::DateTime::<chrono::Local>::from(
-            metadata
-                .modified()
-                .unwrap_or_else(|_| std::time::SystemTime::now()),
+            metadata.modified().unwrap_or_else(|_| SystemTime::now()),
         )
         .format("%Y-%m-%d %H:%M:%S")
         .to_string()
@@ -208,12 +216,19 @@ mod tests {
     use super::*;
     #[test]
     fn show_hidden_files() {
+        let path = None;
+        let json = false;
+        let recursive = false;
+        let sort = false;
+        let test = false;
+
         let cli = CLI {
-            path: None,
+            path,
             all: true,
-            json: false,
-            recursive: false,
-            sort: false,
+            json,
+            recursive,
+            sort,
+            test,
         };
         let files: Vec<String> = cli.get_files().iter().map(|f| f.name.clone()).collect();
         assert!(files.contains(&String::from(".git")));
@@ -221,9 +236,10 @@ mod tests {
         let cli = CLI {
             path: None,
             all: false,
-            json: false,
-            recursive: false,
-            sort: false,
+            json,
+            recursive,
+            sort,
+            test,
         };
         let files: Vec<String> = cli.get_files().iter().map(|f| f.name.clone()).collect();
         assert!(!files.contains(&String::from(".git")));
